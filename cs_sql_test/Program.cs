@@ -1,4 +1,10 @@
-﻿using System;
+﻿/*
+ * Author: Garrett Bates
+ * Date: October 6, 2015
+ * Program: Programmatic MQL Demo
+ */
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -18,7 +24,6 @@ namespace cs_sql_test
         {
             Program p = new Program();
             string data_time = null;
-            List<XmlNode> rows = p.GetJumpsXMLFromEVEAPI(ref data_time);
 
             string connStr = "SERVER=localhost;" +
                  "DATABASE=evesde;" +
@@ -34,19 +39,19 @@ namespace cs_sql_test
             Console.WriteLine("Site: " + conn.Site);
             Console.WriteLine("Compression: " + conn.UseCompression);
 
-            // create table, if it doesnt exist already
+            List<XmlNode> rows = p.GetJumpsXMLFromEVEAPI(ref data_time);
             p.CreateTable(ref conn, data_time);
-
-            // insert data into columns
             p.InsertData(ref conn, ref rows, data_time);
-
-            // run select query
             //p.SelectQuery(ref conn);
-
-
             conn.Close();
         }
 
+        /* 
+         * Makes a synchronous call to the api.eveonline.com server in order to
+         * get the Jumps.xml file. The XML file is then parsed to retrieve
+         * each of the <row> nodes that contain precious solarsystemID and shipJumps
+         * data. This data is then returned back to main.
+         */
         private List<XmlNode> GetJumpsXMLFromEVEAPI(ref string data_time)
         {
             Console.WriteLine("Starting download...");
@@ -82,6 +87,13 @@ namespace cs_sql_test
             return rows;
         }
 
+        /* 
+         * Programmatically tells the MySQL server to create a 'systemjumps'
+         * table if it doesnt exist already. The first column is the primary key
+         * and holds each system's unique ID number. The second column is labeled
+         * by the date and time the document was retrieved and stores the number
+         * of jumps per system.
+         */
         private void CreateTable(ref MySqlConnection conn, string data_time)
         {
             Console.WriteLine("Creating table...");
@@ -104,6 +116,13 @@ namespace cs_sql_test
             }         
         }
 
+        /* 
+         * Creates a new column using document retrieval time as the label.
+         * Populates each row with the number of ships jumped into that system
+         * since the last cache period. Solar systems not in the DB are given
+         * new records and columns updated accordingly. Solar systems already
+         * in the database have their appropriate columns updated with new data.
+         */
         private void InsertData(ref MySqlConnection conn, ref List<XmlNode> rows, string data_time)
         {
             Console.WriteLine("Inserting data...");
@@ -153,6 +172,10 @@ namespace cs_sql_test
             sql_query.Clear();
         }
 
+        /* 
+         * Regurgitates the database into the console window. Not tested heavily,
+         * but it does seem with work with 3 columns of data.
+         */
         private void SelectQuery(ref MySqlConnection conn)
         {
             Console.WriteLine("Running example query...");
