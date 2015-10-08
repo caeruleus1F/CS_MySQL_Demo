@@ -1,7 +1,7 @@
 ﻿/*
  * Author: Garrett Bates
  * Date: October 6, 2015
- * Program: Programmatic MQL Demo
+ * Program: Programmatic MySQL Demo
  */
 
 using System;
