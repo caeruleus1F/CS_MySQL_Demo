@@ -13,6 +13,8 @@ using System.Data;
 using System.Net;
 using System.Xml;
 using System.IO;
+using System.Timers;
+using System.Threading;
 
 using MySql.Data.MySqlClient;
 
@@ -20,12 +22,35 @@ namespace cs_sql_test
 {
     class Program
     {
+        static DateTime _cachedUntilUTC;
+        static DateTime _documentTimeUTC;
+        static System.Timers.Timer _timer = new System.Timers.Timer();
+        static int _seconds_of_delay = 10;
+
         static void Main(string[] args)
         {
-            Program p = new Program();
-            string data_time = null;
+            _timer.Elapsed += new ElapsedEventHandler(_timer_Elapsed);
+            _timer.Interval = 1000;
+            _timer.Enabled = true;
 
-            string connStr = "SERVER=localhost;" +
+            while (true)
+            {
+                Thread.Sleep(10);
+            }
+        }
+
+
+        static void _timer_Elapsed(object sender, ElapsedEventArgs e)
+        {
+            Console.Clear();
+            _timer.Enabled = false;
+            DoWork();
+        }
+
+        private static void DoWork()
+        {
+            string data_time = null;
+            const string connStr = "SERVER=localhost;" +
                  "DATABASE=evesde;" +
                  "UID=root;" +
                  "PWD=password;";
@@ -39,11 +64,13 @@ namespace cs_sql_test
             Console.WriteLine("Site: " + conn.Site);
             Console.WriteLine("Compression: " + conn.UseCompression);
 
-            List<XmlNode> rows = p.GetJumpsXMLFromEVEAPI(ref data_time);
-            p.CreateTable(ref conn, data_time);
-            p.InsertData(ref conn, ref rows, data_time);
-            //p.SelectQuery(ref conn);
+            List<XmlNode> rows = GetJumpsXMLFromEVEAPI(ref data_time);
+            CreateTable(ref conn, data_time);
+            InsertData(ref conn, ref rows, data_time);
+            //SelectQuery(ref conn);
             conn.Close();
+            Console.WriteLine("Data insertion complete. Next pull at {0}",
+                _cachedUntilUTC.ToLocalTime().AddSeconds(_seconds_of_delay).ToLongTimeString());
         }
 
         /* 
@@ -52,7 +79,7 @@ namespace cs_sql_test
          * each of the <row> nodes that contain precious solarsystemID and shipJumps
          * data. This data is then returned back to main.
          */
-        private List<XmlNode> GetJumpsXMLFromEVEAPI(ref string data_time)
+        private static List<XmlNode> GetJumpsXMLFromEVEAPI(ref string data_time)
         {
             Console.WriteLine("Starting download...");
             List<XmlNode> rows = new List<XmlNode>();
@@ -64,12 +91,15 @@ namespace cs_sql_test
             try
             {
                 String response = web.DownloadString("https://api.eveonline.com/map/Jumps.xml.aspx");
-                xmldoc.LoadXml(response);
-                //xmldoc.Save("jumps.xml");
-                //xmldoc.Load("jumps.xml");
                 Console.WriteLine("Download complete...");
+                xmldoc.LoadXml(response);
+                xmldoc.Save("jumps.xml");
                 raw_dataTime = xmldoc.SelectSingleNode("/eveapi/result/dataTime").InnerText;
                 data_time = DateTime.Parse(raw_dataTime).ToString("yyyyMMdd_HHmmss");
+                _documentTimeUTC = DateTime.Parse(xmldoc.SelectSingleNode("/eveapi/currentTime").InnerText);
+                _cachedUntilUTC = DateTime.Parse(xmldoc.SelectSingleNode("/eveapi/cachedUntil").InnerText);
+                _timer.Interval = _cachedUntilUTC.Subtract(_documentTimeUTC).TotalMilliseconds + (_seconds_of_delay * 1000);
+                _timer.Enabled = true;
 
                 foreach (XmlNode item in xmldoc.SelectNodes("/eveapi/result/rowset/row"))
                 {
@@ -79,7 +109,7 @@ namespace cs_sql_test
             }
             catch (Exception ex)
             {
-                StreamWriter writer = new StreamWriter("kaboom.log");
+                StreamWriter writer = new StreamWriter("api_or_parsing_error.log");
                 writer.Write(ex.Message);
                 writer.Close();
             }
@@ -94,15 +124,14 @@ namespace cs_sql_test
          * by the date and time the document was retrieved and stores the number
          * of jumps per system.
          */
-        private void CreateTable(ref MySqlConnection conn, string data_time)
+        private static void CreateTable(ref MySqlConnection conn, string data_time)
         {
             Console.WriteLine("Creating table...");
             try
             {
                 // check to see if system jumps table exists
                 StringBuilder sql_query = new StringBuilder();
-                sql_query.Append("CREATE TABLE IF NOT EXISTS systemjumps(solarSystemID varchar(8) PRIMARY KEY,")
-                    .Append(data_time).Append(" varchar(15) DEFAULT '0') ;");
+                sql_query.Append("CREATE TABLE IF NOT EXISTS systemjumps(solarSystemID int(8) PRIMARY KEY);");
                 MySqlCommand cmd = new MySqlCommand(sql_query.ToString(), conn);
                 cmd.ExecuteNonQuery();   
             }
@@ -123,7 +152,7 @@ namespace cs_sql_test
          * new records and columns updated accordingly. Solar systems already
          * in the database have their appropriate columns updated with new data.
          */
-        private void InsertData(ref MySqlConnection conn, ref List<XmlNode> rows, string data_time)
+        private static void InsertData(ref MySqlConnection conn, ref List<XmlNode> rows, string data_time)
         {
             Console.WriteLine("Inserting data...");
             StringBuilder sql_query = new StringBuilder();
@@ -134,7 +163,7 @@ namespace cs_sql_test
             try
             {
                 // creating new column with dataTime as label
-                sql_query.Append("ALTER TABLE systemjumps ADD ").Append(data_time).Append(" varchar(15) DEFAULT '0';");
+                sql_query.Append("ALTER TABLE systemjumps ADD ").Append(data_time).Append(" int(6) DEFAULT 0;");
                 cmd = new MySqlCommand(sql_query.ToString(), conn);
                 cmd.ExecuteNonQuery();
                 sql_query.Clear();
@@ -155,9 +184,9 @@ namespace cs_sql_test
                     shipJumps = n.Attributes[1].Value;
 
                     sql_query.Append("INSERT INTO systemjumps (solarSystemID, ")
-                        .Append(data_time).Append(") VALUES('").Append(systemID)
-                        .Append("', '").Append(shipJumps).Append("') ON DUPLICATE KEY UPDATE ")
-                        .Append(data_time).Append(" = '").Append(shipJumps).Append("';");
+                        .Append(data_time).Append(") VALUES(").Append(systemID)
+                        .Append(", ").Append(shipJumps).Append(") ON DUPLICATE KEY UPDATE ")
+                        .Append(data_time).Append(" = ").Append(shipJumps).Append(";");
                     cmd = new MySqlCommand(sql_query.ToString(), conn);
                     cmd.ExecuteNonQuery();
                     sql_query.Clear();
@@ -176,7 +205,7 @@ namespace cs_sql_test
          * Regurgitates the database into the console window. Not tested heavily,
          * but it does seem with work with 3 columns of data.
          */
-        private void SelectQuery(ref MySqlConnection conn)
+        private static void SelectQuery(ref MySqlConnection conn)
         {
             Console.WriteLine("Running example query...");
             StringBuilder sql_query = new StringBuilder();
