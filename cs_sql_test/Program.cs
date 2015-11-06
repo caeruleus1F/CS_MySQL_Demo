@@ -24,8 +24,14 @@ namespace cs_sql_test
     {
         static DateTime _cachedUntilUTC;
         static DateTime _documentTimeUTC;
+        static DateTime _next_pull;
         static System.Timers.Timer _timer = new System.Timers.Timer();
-        static int _seconds_of_delay = 10;
+        static int _seconds_of_delay = 30;
+        static int _reattempt_minutes = 1;
+        static string _table_live = "systemjumps";
+        static string _table_test = "systemjumpstest";
+
+        static string _table = _table_live;
 
         static void Main(string[] args)
         {
@@ -39,7 +45,15 @@ namespace cs_sql_test
             }
         }
 
-
+        /*
+         * Called when the Timer::Elapsed event fires.
+         * How often this function is called is determined by the time
+         * listed in the returned XML files' 'cachedUntil' node with
+         * 10 seconds added to prevent an early call to the CCP Jumps
+         * endpoint. The addition of the extra seconds is necessary because
+         * the cachedUntil time doesn't necessarily mean that new data will
+         * be available immediately at the expiration of that time.
+         */
         static void _timer_Elapsed(object sender, ElapsedEventArgs e)
         {
             Console.Clear();
@@ -47,6 +61,9 @@ namespace cs_sql_test
             DoWork();
         }
 
+        /*
+         * Main work function, called when the Timer::Elapsed even fires.
+         */
         private static void DoWork()
         {
             string data_time = null;
@@ -55,22 +72,22 @@ namespace cs_sql_test
                  "UID=root;" +
                  "PWD=password;";
 
-            Console.WriteLine("Connecting to database...");
-            MySqlConnection conn = new MySqlConnection(connStr);
-
-            conn.Open();
-            Console.WriteLine("Database: " + conn.Database);
-            Console.WriteLine("Datasource: " + conn.DataSource);
-            Console.WriteLine("Site: " + conn.Site);
-            Console.WriteLine("Compression: " + conn.UseCompression);
-
             List<XmlNode> rows = GetJumpsXMLFromEVEAPI(ref data_time);
-            CreateTable(ref conn, data_time);
-            InsertData(ref conn, ref rows, data_time);
-            //SelectQuery(ref conn);
-            conn.Close();
-            Console.WriteLine("Data insertion complete. Next pull at {0}",
-                _cachedUntilUTC.ToLocalTime().AddSeconds(_seconds_of_delay).ToLongTimeString());
+
+            if (rows != null)
+            {
+                Console.WriteLine("Connecting to database...");
+
+                MySqlConnection conn = new MySqlConnection(connStr);
+                conn.Open();
+                CreateTable(ref conn, data_time);
+                InsertData(ref conn, ref rows, data_time);
+                conn.Close();
+
+                Console.WriteLine("Data insertion complete.");
+            }
+
+            Console.WriteLine("Next pull attempt at {0}.", _next_pull.AddSeconds(_seconds_of_delay).ToLocalTime().ToLongTimeString());
         }
 
         /* 
@@ -81,25 +98,74 @@ namespace cs_sql_test
          */
         private static List<XmlNode> GetJumpsXMLFromEVEAPI(ref string data_time)
         {
-            Console.WriteLine("Starting download...");
-            List<XmlNode> rows = new List<XmlNode>();
-            WebClient web = new WebClient();
+            List<XmlNode> rows = null;
             XmlDocument xmldoc = new XmlDocument();
-            web.Proxy = null;
-            string raw_dataTime = null;
 
             try
             {
-                String response = web.DownloadString("https://api.eveonline.com/map/Jumps.xml.aspx");
+                if (File.Exists("jumps.xml"))
+                {
+                    xmldoc.Load("jumps.xml");
+
+                    // if the document is expired and the server has had enough
+                    // time to refresh the cache
+                    DateTime document_safe_expiration_time = DateTime.Parse(
+                        xmldoc.SelectSingleNode("/eveapi/cachedUntil").InnerText).AddSeconds(_seconds_of_delay);
+                    if (DateTime.UtcNow > document_safe_expiration_time)
+                    {
+                        rows = AttemptDownload(xmldoc, ref data_time);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Local cache still fresh...");
+                        _cachedUntilUTC = DateTime.Parse(xmldoc.SelectSingleNode("/eveapi/cachedUntil").InnerText);
+                        _next_pull = _cachedUntilUTC;
+                        _timer.Interval = _next_pull.Subtract(DateTime.UtcNow).TotalMilliseconds + (_seconds_of_delay * 1000);
+                    }
+                }
+                else
+                {
+                    rows = AttemptDownload(xmldoc, ref data_time);
+                }
+
+                _timer.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                StreamWriter writer = new StreamWriter("api_or_parsing_error.log");
+                writer.Write(ex.Message);
+                writer.Close();
+            }
+
+            return rows;
+        }
+
+        private static List<XmlNode> AttemptDownload(XmlDocument xmldoc, ref string data_time)
+        {
+            List<XmlNode> rows = null;
+            string raw_dataTime = null;
+            string response = null;
+            WebClient web = new WebClient();
+            web.Proxy = null;
+
+            try
+            {
+                Console.WriteLine("Starting download...");
+                response = web.DownloadString("https://api.eveonline.com/map/Jumps.xml.aspx");
                 Console.WriteLine("Download complete...");
+
                 xmldoc.LoadXml(response);
-                xmldoc.Save("jumps.xml");
+                xmldoc.Save("jumps.xml"); // keep local copy for program restarts
+
                 raw_dataTime = xmldoc.SelectSingleNode("/eveapi/result/dataTime").InnerText;
                 data_time = DateTime.Parse(raw_dataTime).ToString("yyyyMMdd_HHmmss");
                 _documentTimeUTC = DateTime.Parse(xmldoc.SelectSingleNode("/eveapi/currentTime").InnerText);
                 _cachedUntilUTC = DateTime.Parse(xmldoc.SelectSingleNode("/eveapi/cachedUntil").InnerText);
-                _timer.Interval = _cachedUntilUTC.Subtract(_documentTimeUTC).TotalMilliseconds + (_seconds_of_delay * 1000);
+
+                _next_pull = _cachedUntilUTC;
+                _timer.Interval = _next_pull.Subtract(_documentTimeUTC).TotalMilliseconds + (_seconds_of_delay * 1000);
                 _timer.Enabled = true;
+                rows = new List<XmlNode>();
 
                 foreach (XmlNode item in xmldoc.SelectNodes("/eveapi/result/rowset/row"))
                 {
@@ -109,9 +175,10 @@ namespace cs_sql_test
             }
             catch (Exception ex)
             {
-                StreamWriter writer = new StreamWriter("api_or_parsing_error.log");
-                writer.Write(ex.Message);
-                writer.Close();
+                Console.WriteLine("Download failed. Re-attempting in {0}m.", _reattempt_minutes);
+                _next_pull = DateTime.Now.AddMinutes(_reattempt_minutes);
+                _timer.Interval = _reattempt_minutes * 60 * 1000; // if the download fails, re-attempt
+                _timer.Enabled = true;
             }
 
             return rows;
@@ -131,7 +198,7 @@ namespace cs_sql_test
             {
                 // check to see if system jumps table exists
                 StringBuilder sql_query = new StringBuilder();
-                sql_query.Append("CREATE TABLE IF NOT EXISTS systemjumps(solarSystemID int(8) PRIMARY KEY);");
+                sql_query.Append("CREATE TABLE IF NOT EXISTS ").Append(_table).Append("(solarSystemID int(8) PRIMARY KEY);");
                 MySqlCommand cmd = new MySqlCommand(sql_query.ToString(), conn);
                 cmd.ExecuteNonQuery();   
             }
@@ -163,10 +230,9 @@ namespace cs_sql_test
             try
             {
                 // creating new column with dataTime as label
-                sql_query.Append("ALTER TABLE systemjumps ADD ").Append(data_time).Append(" int(6) DEFAULT 0;");
+                sql_query.Append("ALTER TABLE ").Append(_table).Append(" ADD ").Append(data_time).Append(" int(6) DEFAULT 0;");
                 cmd = new MySqlCommand(sql_query.ToString(), conn);
                 cmd.ExecuteNonQuery();
-                sql_query.Clear();
             }
             catch(Exception ex)
             {
@@ -183,7 +249,7 @@ namespace cs_sql_test
                     systemID = n.Attributes[0].Value;
                     shipJumps = n.Attributes[1].Value;
 
-                    sql_query.Append("INSERT INTO systemjumps (solarSystemID, ")
+                    sql_query.Append("INSERT INTO ").Append(_table).Append(" (solarSystemID, ")
                         .Append(data_time).Append(") VALUES(").Append(systemID)
                         .Append(", ").Append(shipJumps).Append(") ON DUPLICATE KEY UPDATE ")
                         .Append(data_time).Append(" = ").Append(shipJumps).Append(";");
@@ -209,7 +275,7 @@ namespace cs_sql_test
         {
             Console.WriteLine("Running example query...");
             StringBuilder sql_query = new StringBuilder();
-            sql_query.Append("select * from evesde.systemjumps;");
+            sql_query.Append("select * from evesde.").Append(_table).Append(";");
             MySqlCommand cmd = new MySqlCommand(sql_query.ToString(), conn);
 
             MySqlDataAdapter MyAdapter = new MySqlDataAdapter();
