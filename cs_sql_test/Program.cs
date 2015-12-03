@@ -28,10 +28,11 @@ namespace cs_sql_test
         static System.Timers.Timer _timer = new System.Timers.Timer();
         static int _seconds_of_delay = 30;
         static int _reattempt_minutes = 1;
-        static string _table_live = "systemjumps";
-        static string _table_test = "systemjumpstest";
+        //static string _table_live = "systemjumps";
+        //static string _table_test = "systemjumpstest";
 
-        static string _table = _table_live;
+        //static string _table = _table_live;
+        static string _table = null;
 
         static void Main(string[] args)
         {
@@ -68,7 +69,7 @@ namespace cs_sql_test
         {
             string data_time = null;
             const string connStr = "SERVER=localhost;" +
-                 "DATABASE=evesde;" +
+                 "DATABASE=eve_data;" +
                  "UID=root;" +
                  "PWD=password;";
 
@@ -80,7 +81,7 @@ namespace cs_sql_test
 
                 MySqlConnection conn = new MySqlConnection(connStr);
                 conn.Open();
-                CreateTable(ref conn, data_time);
+                CreateTable(ref conn);
                 InsertData(ref conn, ref rows, data_time);
                 conn.Close();
 
@@ -191,11 +192,21 @@ namespace cs_sql_test
          * by the date and time the document was retrieved and stores the number
          * of jumps per system.
          */
-        private static void CreateTable(ref MySqlConnection conn, string data_time)
+        private static void CreateTable(ref MySqlConnection conn)
         {
+            int month = 0;
+            int year = 0;
+            StringBuilder sb = new StringBuilder();
+
             Console.WriteLine("Creating table...");
             try
             {
+
+                month = _documentTimeUTC.Month;
+                year = _documentTimeUTC.Year;
+                sb.Append("jumps_").Append(month.ToString()).Append("_").Append(year.ToString());
+                _table = sb.ToString();
+
                 // check to see if system jumps table exists
                 StringBuilder sql_query = new StringBuilder();
                 sql_query.Append("CREATE TABLE IF NOT EXISTS ").Append(_table).Append("(solarSystemID int(8) PRIMARY KEY);");
