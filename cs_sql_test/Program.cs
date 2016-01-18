@@ -36,6 +36,8 @@ namespace cs_sql_test
 
         static void Main(string[] args)
         {
+            Console.WindowWidth = 33;
+            Console.WindowHeight = 7;
             _timer.Elapsed += new ElapsedEventHandler(_timer_Elapsed);
             _timer.Interval = 1000;
             _timer.Enabled = true;
@@ -197,8 +199,7 @@ namespace cs_sql_test
             int month = 0;
             int year = 0;
             StringBuilder sb = new StringBuilder();
-
-            Console.WriteLine("Creating table...");
+            
             try
             {
 
@@ -211,7 +212,11 @@ namespace cs_sql_test
                 StringBuilder sql_query = new StringBuilder();
                 sql_query.Append("CREATE TABLE IF NOT EXISTS ").Append(_table).Append("(solarSystemID int(8) PRIMARY KEY);");
                 MySqlCommand cmd = new MySqlCommand(sql_query.ToString(), conn);
-                cmd.ExecuteNonQuery();   
+
+                if (cmd.ExecuteNonQuery() != 0)
+                {
+                    Console.WriteLine("Table " + sb.ToString() + " created.");
+                }
             }
             catch (Exception ex)
             {
